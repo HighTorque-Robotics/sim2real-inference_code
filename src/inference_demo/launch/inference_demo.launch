@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<launch>
+  <node name="inference_demo_node" pkg="inference_demo" type="inference_demo_node" output="screen">
+    <param name="model_type" value="pi_plus"/>
+    <param name="policy_path" value="$(find inference_demo)/policy/combined_model_dwaq_v1226.rknn"/>
+    <param name="num_actions" value="12"/>
+    <param name="num_single_obs" value="48"/>
+    <param name="frame_stack" value="6"/>
+    <param name="rl_ctrl_freq" value="50.0"/>
+    <param name="clip_obs" value="18.0"/>
+    
+    <param name="cmd_lin_vel_scale" value="5.0"/>
+    <param name="cmd_ang_vel_scale" value="0.25"/>
+    <param name="rbt_lin_pos_scale" value="1.0"/>
+    <param name="rbt_lin_vel_scale" value="0.05"/>
+    <param name="rbt_ang_vel_scale" value="0.25"/>
+    
+    <rosparam param="clip_actions_lower">[-3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0]</rosparam>
+    <rosparam param="clip_actions_upper">[3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]</rosparam>
+  </node>
+</launch>

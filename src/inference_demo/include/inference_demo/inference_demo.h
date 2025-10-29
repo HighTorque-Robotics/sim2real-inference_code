@@ -10,9 +10,7 @@
 #include <deque>
 #include <vector>
 
-#ifdef PLATFORM_X86_64
-#include <openvino/openvino.hpp>
-#elif defined(PLATFORM_ARM)
+#ifdef PLATFORM_ARM
 #include "rknn_api.h"
 #endif
 
@@ -82,12 +80,7 @@ private:
     bool stateReceived_;
     bool imuReceived_;
 
-#ifdef PLATFORM_X86_64
-    ov::Core core_;
-    std::shared_ptr<ov::Model> model_;
-    ov::CompiledModel compiledModel_;
-    ov::InferRequest inferRequest_;
-#elif defined(PLATFORM_ARM)
+#ifdef PLATFORM_ARM
     rknn_context ctx_{};
     rknn_input_output_num ioNum_{};
     rknn_input rknnInputs_[1]{};
