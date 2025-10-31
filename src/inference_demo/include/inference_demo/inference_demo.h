@@ -29,7 +29,7 @@ public:
 
 private:
     bool loadPolicy();
-    void updateObservation();
+    void updateObservation(bool standby = false);
     void updateAction();
     void quat2euler();
     Eigen::Vector3d quatRotateInverse(const Eigen::Vector4d& q, const Eigen::Vector3d& v);
@@ -41,6 +41,7 @@ private:
     std::shared_ptr<ros::NodeHandle> nh_;
 
     ros::Publisher jointCmdPub_;
+    ros::Publisher presetPub_;
     ros::Subscriber robotStateSub_;
     ros::Subscriber imuSub_;
     ros::Subscriber cmdVelSub_;
