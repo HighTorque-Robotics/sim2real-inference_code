@@ -4,9 +4,9 @@
     <param name="model_type" value="pi_plus"/>
     <param name="policy_path" value="$(find inference_demo)/policy/policy0905_torknn.rknn"/>
     <param name="num_actions" value="12"/>
-    <param name="num_single_obs" value="48"/>
-    <param name="frame_stack" value="6"/>
-    <param name="rl_ctrl_freq" value="50.0"/>
+    <param name="num_single_obs" value="36"/>
+    <param name="frame_stack" value="1"/>
+    <param name="rl_ctrl_freq" value="100.0"/>
     <param name="clip_obs" value="18.0"/>
     
     <param name="cmd_lin_vel_scale" value="5.0"/>
@@ -15,8 +15,8 @@
     <param name="rbt_lin_vel_scale" value="0.05"/>
     <param name="rbt_ang_vel_scale" value="0.25"/>
     
-    <rosparam param="clip_actions_lower">[-3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0]</rosparam>
-    <rosparam param="clip_actions_upper">[3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]</rosparam>
+    <rosparam param="clip_actions_lower">[-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, -3.14, -3.14, -3.14, -3.14, -3.14, -3.14]</rosparam>
+    <rosparam param="clip_actions_upper">[3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 3.14]</rosparam>
     
     <!-- Motor direction for polarity correction (from pd_config_develop.yaml, first 12 joints) -->
     <rosparam param="motor_direction">[1, 1, -1, -1, 1, 1, -1, 1, -1, 1, -1, 1]</rosparam>

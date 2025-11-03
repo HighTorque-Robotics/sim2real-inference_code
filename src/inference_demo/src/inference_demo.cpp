@@ -358,7 +358,7 @@ void InferenceDemo::updateObservation()
 
     observations_.segment(24, numActions_) = motorJointVelocities_ * rbtLinVelScale_;
 
-    observations_.segment(36, numActions_) = action_;
+    // 观测固定为36维，不包含上一帧动作
 
     for (int i = 0; i < numSingleObs_; ++i)
     {
@@ -718,8 +718,7 @@ void InferenceDemo::run()
         if (currentState_ == STANDBY) {
             msg.position.resize(22);
             for (int i = 0; i < 12; ++i) {
-                // msg.position[i] = action_[i];
-                msg.position[i] = 0;
+                msg.position[i] = action_[i];
             }
             for (int i = 12; i < 22; ++i) {
                 msg.position[i] = 0.0;
