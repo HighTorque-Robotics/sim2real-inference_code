@@ -2,7 +2,7 @@
 <launch>
   <node name="inference_demo_node" pkg="inference_demo" type="inference_demo_node" output="screen">
     <param name="model_type" value="pi_plus"/>
-    <param name="policy_path" value="$(find inference_demo)/policy/combined_model_dwaq_v1226.rknn"/>
+    <param name="policy_path" value="$(find inference_demo)/policy/policy0905_torknn.rknn"/>
     <param name="num_actions" value="12"/>
     <param name="num_single_obs" value="48"/>
     <param name="frame_stack" value="6"/>
@@ -17,5 +17,15 @@
     
     <rosparam param="clip_actions_lower">[-3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0]</rosparam>
     <rosparam param="clip_actions_upper">[3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]</rosparam>
+    
+    <!-- Motor direction for polarity correction (from pd_config_develop.yaml, first 12 joints) -->
+    <rosparam param="motor_direction">[1, 1, -1, -1, 1, 1, -1, 1, -1, 1, -1, 1]</rosparam>
+    
+    <!-- Joint order mapping for INPUT data: mtr_state (L-R) to policy (R-L) -->
+    <!-- This ensures input joint order matches the order used during policy training -->
+    <!-- pd_config: [L0,L1,L2,L3,L4,L5, R0,R1,R2,R3,R4,R5] -->
+    <!-- footstep_jz: [R0,R1,R2,R3,R4,R5, L0,L1,L2,L3,L4,L5] -->
+    <!-- actual[i] maps to policy[actualToPolicyMap[i]] -->
+    <rosparam param="actual_to_policy_map">[6, 7, 8, 9, 10, 11, 0, 1, 2, 3, 4, 5]</rosparam>
   </node>
 </launch>

@@ -29,12 +29,13 @@ public:
 
 private:
     bool loadPolicy();
-    void updateObservation(bool standby = false);
+    void updateObservation();
     void updateAction();
     void quat2euler();
     Eigen::Vector3d quatRotateInverse(const Eigen::Vector4d& q, const Eigen::Vector3d& v);
 
     void robotStateCallback(const sensor_msgs::JointState::ConstPtr& msg);
+    void motorStateCallback(const sensor_msgs::JointState::ConstPtr& msg);
     void imuCallback(const sensor_msgs::Imu::ConstPtr& msg);
     void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
 
@@ -43,6 +44,7 @@ private:
     ros::Publisher jointCmdPub_;
     ros::Publisher presetPub_;
     ros::Subscriber robotStateSub_;
+    ros::Subscriber motorStateSub_;
     ros::Subscriber imuSub_;
     ros::Subscriber cmdVelSub_;
 
@@ -63,8 +65,14 @@ private:
     std::vector<float> clipActionsLower_;
     std::vector<float> clipActionsUpper_;
 
-    Eigen::VectorXd jointPositions_;
-    Eigen::VectorXd jointVelocities_;
+    // Robot关节数据（相对位置，来自rbt_state话题）
+    Eigen::VectorXd robotJointPositions_;
+    Eigen::VectorXd robotJointVelocities_;
+    
+    // Motor关节数据（绝对角度，来自mtr_state话题，用于策略推理）
+    Eigen::VectorXd motorJointPositions_;
+    Eigen::VectorXd motorJointVelocities_;
+    
     Eigen::Quaterniond quat_;
     Eigen::Vector3d eulerAngles_;
     Eigen::Vector3d baseAngVel_;
@@ -77,6 +85,17 @@ private:
 
     Eigen::VectorXd action_;
 
+    std::vector<double> urdfOffset_;
+    std::vector<int> motorDirection_;
+    std::vector<int> actualToPolicyMap_;  // 输入关节顺序映射：从mtr_state顺序到policy训练时的顺序
+
+    double stepsPeriod_;
+    double step_;
+    bool isMoving_;
+    bool completingCycle_;
+    double lastPitch_;
+    double lastRoll_;
+
     bool quit_;
     bool stateReceived_;
     bool imuReceived_;
@@ -87,6 +106,10 @@ private:
     rknn_input rknnInputs_[1]{};
     rknn_output rknnOutputs_[1]{};
 #endif
+
+    // 状态机（类内成员）
+    enum State { NOT_READY, STANDBY, RUNNING };
+    State currentState_ = NOT_READY;
 };
 
 } // namespace inference_demo

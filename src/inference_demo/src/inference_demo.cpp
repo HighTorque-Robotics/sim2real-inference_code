@@ -101,8 +101,10 @@ InferenceDemo::InferenceDemo(std::shared_ptr<ros::NodeHandle> nh)
     }
     ROS_INFO("Action clipping vectors initialized");
 
-    jointPositions_ = Eigen::VectorXd::Zero(numActions_);
-    jointVelocities_ = Eigen::VectorXd::Zero(numActions_);
+    robotJointPositions_ = Eigen::VectorXd::Zero(numActions_);
+    robotJointVelocities_ = Eigen::VectorXd::Zero(numActions_);
+    motorJointPositions_ = Eigen::VectorXd::Zero(numActions_);
+    motorJointVelocities_ = Eigen::VectorXd::Zero(numActions_);
     eulerAngles_ = Eigen::Vector3d::Zero();
     baseAngVel_ = Eigen::Vector3d::Zero();
     command_ = Eigen::Vector3d::Zero();
@@ -118,6 +120,37 @@ InferenceDemo::InferenceDemo(std::shared_ptr<ros::NodeHandle> nh)
     ROS_INFO("Observation vectors initialized");
 
     quat_ = Eigen::Quaterniond::Identity();
+    
+    nh_->param<std::vector<double>>("urdf_dof_pos_offset", urdfOffset_, std::vector<double>(numActions_, 0.0));
+    nh_->param<std::vector<int>>("motor_direction", motorDirection_, std::vector<int>(numActions_, 1));
+    
+    // 加载关节顺序映射（从actual到policy，用于输入数据重排）
+    std::vector<int> defaultMap(numActions_);
+    for (int i = 0; i < numActions_; ++i) defaultMap[i] = i;  // 默认恒等映射
+    nh_->param<std::vector<int>>("actual_to_policy_map", actualToPolicyMap_, defaultMap);
+    
+    if (urdfOffset_.size() != static_cast<size_t>(numActions_)) {
+        ROS_WARN("urdf_dof_pos_offset size (%zu) != numActions (%d), using defaults", urdfOffset_.size(), numActions_);
+        urdfOffset_.assign(numActions_, 0.0);
+    }
+    if (motorDirection_.size() != static_cast<size_t>(numActions_)) {
+        ROS_WARN("motor_direction size (%zu) != numActions (%d), using defaults", motorDirection_.size(), numActions_);
+        motorDirection_.assign(numActions_, 1);
+    }
+    if (actualToPolicyMap_.size() != static_cast<size_t>(numActions_)) {
+        ROS_WARN("actual_to_policy_map size (%zu) != numActions (%d), using identity mapping", actualToPolicyMap_.size(), numActions_);
+        actualToPolicyMap_ = defaultMap;
+    }
+    ROS_INFO("URDF offset, motor direction, and joint mapping loaded");
+    
+    nh_->param<double>("steps_period", stepsPeriod_, 50.0);
+    step_ = 0.0;
+    isMoving_ = false;
+    completingCycle_ = false;
+    lastPitch_ = 0.0;
+    lastRoll_ = 0.0;
+    ROS_INFO("Gait state machine initialized, steps_period=%.1f", stepsPeriod_);
+    
     ROS_INFO("=== InferenceDemo Constructor Completed ===");
 
     ROS_INFO("========================================");
@@ -150,6 +183,7 @@ bool InferenceDemo::init()
     ROS_INFO("Publisher created for preset topic: %s", presetTopic.c_str());
 
     robotStateSub_ = nh_->subscribe("/sim2real_master_node/rbt_state", 10, &InferenceDemo::robotStateCallback, this);
+    motorStateSub_ = nh_->subscribe("/sim2real_master_node/mtr_state", 50, &InferenceDemo::motorStateCallback, this);
     imuSub_ = nh_->subscribe("/imu/data", 1, &InferenceDemo::imuCallback, this);
     cmdVelSub_ = nh_->subscribe("/cmd_vel", 10, &InferenceDemo::cmdVelCallback, this);
     ROS_INFO("Subscribers created");
@@ -229,7 +263,7 @@ bool InferenceDemo::loadPolicy()
     rknnInputs_[0].pass_through = false;
     rknnInputs_[0].type = RKNN_TENSOR_FLOAT32;
     rknnInputs_[0].fmt = RKNN_TENSOR_NHWC;
-    ROS_INFO("RKNN input tensor configured, size: %d", obsInput_.size() * sizeof(float));
+    ROS_INFO("RKNN input tensor configured, size: %zu", obsInput_.size() * sizeof(float));
 
     memset(rknnOutputs_, 0, sizeof(rknnOutputs_));
     rknnOutputs_[0].want_float = true;
@@ -239,67 +273,147 @@ bool InferenceDemo::loadPolicy()
 #endif
 }
 
-void InferenceDemo::updateObservation(bool standby)
+void InferenceDemo::updateObservation()
 {
     ROS_DEBUG("=== updateObservation() Started ===");
     
-    // 0-2 base_ang_vel
-    observations_.segment(0, 3) = baseAngVel_ * rbtAngVelScale_;
-    ROS_DEBUG("Base angular velocity processed");
-
-    // 3-5 projected_gravity
-    Eigen::Vector3d gravity(0, 0, -1);
-    Eigen::Vector4d q(quat_.x(), quat_.y(), quat_.z(), quat_.w());
-    observations_.segment(3, 3) = quatRotateInverse(q, gravity);
-    ROS_DEBUG("Gravity vector processed");
-
-    // 6,7,8 commands
-    observations_[6] = command_[0] * cmdLinVelScale_;
-    observations_[7] = command_[1] * cmdLinVelScale_;
-    observations_[8] = command_[2] * cmdAngVelScale_;
-    ROS_DEBUG("Command velocities processed");
-
-    // 9 standing_command_mask
-    if (std::abs(observations_[6]) > 1e-9 || std::abs(observations_[7]) > 1e-9 || std::abs(observations_[8]) > 1e-9)
+    // STANDBY 模式下强制静止，不更新步态状态机
+    if (currentState_ == STANDBY)
     {
-        observations_[9] = 0.0;
+        // 强制重置步态状态机
+        isMoving_ = false;
+        completingCycle_ = false;
+        step_ = 0.0;
     }
-    else
+    else if (currentState_ == RUNNING)
     {
-        observations_[9] = 0.0;
+        // RUNNING 模式下正常运行步态状态机
+        const double VEL_THRESHOLD = 0.01;
+        bool hasVelocityCommand = (std::abs(command_[0]) > VEL_THRESHOLD ||
+                                   std::abs(command_[1]) > VEL_THRESHOLD ||
+                                   std::abs(command_[2]) > VEL_THRESHOLD);
+
+        double currentPitch = eulerAngles_[1];
+        double currentRoll = eulerAngles_[0];
+
+        bool attitudeExceeded = false;
+        if (!isMoving_ && !completingCycle_)
+        {
+            attitudeExceeded = (std::abs(currentPitch) > 0.18 || std::abs(currentRoll) > 0.18);
+        }
+
+        if (!isMoving_ && !completingCycle_)
+        {
+            if (hasVelocityCommand || attitudeExceeded)
+            {
+                isMoving_ = true;
+                step_ = 0.0;
+                lastPitch_ = currentPitch;
+                lastRoll_ = currentRoll;
+            }
+        }
+        else if (isMoving_)
+        {
+            if (!hasVelocityCommand)
+            {
+                isMoving_ = false;
+                completingCycle_ = true;
+            }
+        }
+
+        if (isMoving_ || completingCycle_)
+        {
+            step_ += 1.0 / stepsPeriod_;
+
+            if (step_ >= 1.0)
+            {
+                step_ = 0.0;
+                if (completingCycle_)
+                {
+                    completingCycle_ = false;
+                    lastPitch_ = currentPitch;
+                    lastRoll_ = currentRoll;
+                }
+            }
+        }
     }
 
-    // 10,11 time features (sin/cos)
-    static double time_counter = 0.0;
-    if (standby) {
-        // standby 模式：固定值
-        observations_[10] = 1.0;
-        observations_[11] = -1.0;
-    } else {
-        // running 模式：周期性 sin/cos
-        time_counter += (1.0 / rlCtrlFreq_);
-        observations_[10] = std::sin(2.0 * M_PI * time_counter * rlCtrlFreq_);
-        observations_[11] = std::cos(2.0 * M_PI * time_counter * rlCtrlFreq_);
-    }
-    ROS_DEBUG("Command flags and time features processed");
+    observations_[0] = eulerAngles_[2];
 
-    // 12-23 joint positions
-    observations_.segment(12, numActions_) = jointPositions_ * rbtLinPosScale_;
-    // 24-35 joint velocities  
-    observations_.segment(24, numActions_) = jointVelocities_ * rbtLinVelScale_;
-    // 36-47 previous actions
+    observations_.segment(1, 3) = baseAngVel_ * rbtAngVelScale_;
+
+    Eigen::Vector3d gravityVec(0.0, 0.0, -1.0);
+    Eigen::Vector4d quatVec(quat_.x(), quat_.y(), quat_.z(), quat_.w());
+    observations_.segment(4, 3) = quatRotateInverse(quatVec, gravityVec);
+
+    observations_[7] = command_[0] * cmdLinVelScale_;
+    observations_[8] = command_[1] * cmdLinVelScale_;
+    observations_[9] = command_[2] * cmdAngVelScale_;
+
+    bool isStationary = (!isMoving_ && !completingCycle_) || (currentState_ == STANDBY);
+    observations_[10] = isStationary ? 0.0 : std::sin(2 * M_PI * step_);
+    observations_[11] = isStationary ? 1.0 : std::cos(2 * M_PI * step_);
+
+    observations_.segment(12, numActions_) = motorJointPositions_ * rbtLinPosScale_;
+
+    observations_.segment(24, numActions_) = motorJointVelocities_ * rbtLinVelScale_;
+
     observations_.segment(36, numActions_) = action_;
-    ROS_DEBUG("Joint states and actions processed");
 
-    // Clip observations
     for (int i = 0; i < numSingleObs_; ++i)
     {
         observations_[i] = std::clamp(observations_[i], -clipObs_, clipObs_);
     }
-    ROS_DEBUG("Observations clipped");
 
     histObs_.push_back(observations_);
     histObs_.pop_front();
+    
+    // 打印观测数据（每10次打印一次）
+    static int obs_print_count = 0;
+    if (++obs_print_count % 10 == 0) {
+        std::ostringstream line;
+        line.setf(std::ios::fixed);
+        line.precision(4);
+        
+        ROS_INFO("[INFERENCE_DEMO OBS] yaw=%.4f", observations_[0]);
+        
+        line.str(""); line.clear();
+        line << "ang_vel (scaled)=[" << observations_[1] << ", " << observations_[2] << ", " << observations_[3] << "]";
+        ROS_INFO("%s", line.str().c_str());
+        
+        line.str(""); line.clear();
+        line << "ang_vel (raw)=[" << baseAngVel_[0] << ", " << baseAngVel_[1] << ", " << baseAngVel_[2] << "]";
+        ROS_INFO("%s", line.str().c_str());
+        
+        line.str(""); line.clear();
+        line << "gravity=[" << observations_[4] << ", " << observations_[5] << ", " << observations_[6] << "]";
+        ROS_INFO("%s", line.str().c_str());
+        
+        line.str(""); line.clear();
+        line << "cmd=[" << observations_[7] << ", " << observations_[8] << ", " << observations_[9] << "]";
+        ROS_INFO("%s", line.str().c_str());
+        
+        ROS_INFO("phase=[%.4f, %.4f] (sin, cos)", observations_[10], observations_[11]);
+        
+        line.str(""); line.clear();
+        line << "joint_pos=[";
+        for (int i = 0; i < 12; ++i) {
+            if (i) line << ", ";
+            line << observations_[12 + i];
+        }
+        line << "]";
+        ROS_INFO("%s", line.str().c_str());
+        
+        line.str(""); line.clear();
+        line << "joint_vel=[";
+        for (int i = 0; i < 12; ++i) {
+            if (i) line << ", ";
+            line << observations_[24 + i];
+        }
+        line << "]";
+        ROS_INFO("%s", line.str().c_str());
+    }
+    
     ROS_DEBUG("=== updateObservation() Completed ===");
 }
 
@@ -353,6 +467,21 @@ void InferenceDemo::updateAction()
     }
     ROS_DEBUG("Actions processed and clamped");
     
+    // 打印策略输出结果
+    static int print_count = 0;
+    if (++print_count % 10 == 0) {  // 每10次打印一次，避免刷屏
+        std::ostringstream line;
+        line.setf(std::ios::fixed);
+        line.precision(4);
+        line << "[POLICY OUTPUT] action=[";
+        for (int i = 0; i < numActions_; ++i) {
+            if (i) line << ", ";
+            line << action_[i];
+        }
+        line << "]";
+        ROS_INFO("%s", line.str().c_str());
+    }
+    
     rknn_outputs_release(ctx_, ioNum_.n_output, rknnOutputs_);
     ROS_DEBUG("=== updateAction() Completed ===");
 }
@@ -395,17 +524,17 @@ void InferenceDemo::robotStateCallback(const sensor_msgs::JointState::ConstPtr& 
     ROS_DEBUG("Robot state callback triggered");
     if (msg->position.size() < static_cast<size_t>(numActions_))
     {
-        ROS_WARN_THROTTLE(1.0, "Joint state size too small: %zu < %d", msg->position.size(), numActions_);
+        ROS_WARN_THROTTLE(1.0, "Robot joint state size too small: %zu < %d", msg->position.size(), numActions_);
         return;
     }
     
-    // 只使用前 numActions_ 个关节（腿部关节）
+    // 保存robot关节数据（相对位置，来自rbt_state话题）
     for (int i = 0; i < numActions_; ++i)
     {
-        jointPositions_[i] = msg->position[i];
+        robotJointPositions_[i] = msg->position[i];
         if (msg->velocity.size() >= static_cast<size_t>(numActions_))
         {
-            jointVelocities_[i] = msg->velocity[i];
+            robotJointVelocities_[i] = msg->velocity[i];
         }
     }
     
@@ -418,6 +547,42 @@ void InferenceDemo::robotStateCallback(const sensor_msgs::JointState::ConstPtr& 
     ROS_DEBUG("Robot state processed successfully");
 }
 
+void InferenceDemo::motorStateCallback(const sensor_msgs::JointState::ConstPtr& msg)
+{
+    ROS_DEBUG("Motor state callback triggered");
+    if (msg->position.size() < static_cast<size_t>(numActions_))
+    {
+        ROS_WARN_THROTTLE(1.0, "Motor state size too small: %zu < %d", msg->position.size(), numActions_);
+        return;
+    }
+    
+    // 保存motor关节数据（绝对角度，来自mtr_state话题）
+    // 1. 应用 motor_direction 来转换极性
+    // 2. 应用 actual_to_policy_map 来重排输入顺序，确保与策略训练时的关节顺序一致
+    //    (例如: mtr_state是左右顺序，policy训练时是右左顺序)
+    for (int i = 0; i < numActions_; ++i)
+    {
+        // actualToPolicyMap_[i] 表示: actual的第i个关节 应该放到 policy的哪个位置
+        int policyIdx = actualToPolicyMap_[i];
+        if (policyIdx >= 0 && policyIdx < numActions_)
+        {
+            // 应用电机方向（符号）并存储到policy顺序的位置
+            motorJointPositions_[policyIdx] = msg->position[i] * motorDirection_[i];
+            if (msg->velocity.size() >= static_cast<size_t>(numActions_))
+            {
+                motorJointVelocities_[policyIdx] = msg->velocity[i] * motorDirection_[i];
+            }
+        }
+    }
+    
+    if (!stateReceived_)
+    {
+        stateReceived_ = true;
+        ROS_INFO("First motor state received. Applying motor_direction and input joint order mapping.");
+    }
+    ROS_DEBUG("Motor state processed successfully");
+}
+
 void InferenceDemo::imuCallback(const sensor_msgs::Imu::ConstPtr& msg)
 {
     ROS_DEBUG("IMU callback triggered");
@@ -426,9 +591,9 @@ void InferenceDemo::imuCallback(const sensor_msgs::Imu::ConstPtr& msg)
     quat_.z() = msg->orientation.z;
     quat_.w() = msg->orientation.w;
     quat2euler();
-    baseAngVel_[0] = msg->angular_velocity.x;
-    baseAngVel_[1] = msg->angular_velocity.y;
-    baseAngVel_[2] = msg->angular_velocity.z;
+    baseAngVel_[0] = msg->angular_velocity.x; 
+    baseAngVel_[1] = msg->angular_velocity.y; 
+    baseAngVel_[2] = msg->angular_velocity.z; 
     if (!imuReceived_)
     {
         imuReceived_ = true;
@@ -451,23 +616,22 @@ void InferenceDemo::run()
     ros::Rate rate(rlCtrlFreq_);
     ROS_INFO("=== Starting inference loop at %.1f Hz ===", rlCtrlFreq_);
     
-    enum State { NOT_READY, STANDBY, RUNNING };
-    static State currentState = NOT_READY;
     const char* stateNames[] = {"NOT_READY", "STANDBY", "RUNNING"};
-    ROS_INFO("Initial state: %s (press LT+RT+START to reset and enter STANDBY)", stateNames[currentState]);
+    ROS_INFO("Initial state: %s (press LT+RT+START to reset and enter STANDBY)", stateNames[currentState_]);
     
     int loopCount = 0;
     static ros::Time last_trigger(0);
     
     while (ros::ok() && !quit_)
     {
-        ROS_DEBUG("=== Loop iteration %d, state=%s ===", loopCount++, stateNames[currentState]);
+        ROS_DEBUG("=== Loop iteration %d, state=%s ===", loopCount++, stateNames[currentState_]);
         ros::spinOnce();
         
-        if (currentState == RUNNING) {
-            updateObservation(false);  // RUNNING 模式：standby=false
+        if (currentState_ != NOT_READY) {
+            updateObservation();
             updateAction();
         }
+
 
         if (g_joy_ready.load()) {
             int axis2 = 2, axis5 = 5, btn_start = 7, btn_lb = 4;
@@ -487,122 +651,90 @@ void InferenceDemo::run()
             static int debug_count = 0;
             if (++debug_count % 50 == 0) {
                 ROS_INFO("State=%s | LT=%.2f RT=%.2f START=%d LB=%d | Reset=%d Toggle=%d",
-                    stateNames[currentState],
+                    stateNames[currentState_],
                     (axis2 >= 0 && axis2 < (int)g_joy_msg.axes.size()) ? g_joy_msg.axes[axis2] : -999.0,
                     (axis5 >= 0 && axis5 < (int)g_joy_msg.axes.size()) ? g_joy_msg.axes[axis5] : -999.0,
                     start_pressed, lb_pressed, trigger_reset, trigger_toggle);
             }
 
+            // LT+RT+START: 从 NOT_READY 进入 RL 模式（STANDBY）
             if (trigger_reset && (ros::Time::now() - last_trigger).toSec() > 1.0) {
-                last_trigger = ros::Time::now();
-                
-                double reset_duration = 2.0;
-                nh_->param("reset_duration", reset_duration, reset_duration);
-                
-                sensor_msgs::JointState preset;
-                preset.header.frame_id = "zero";
-                preset.header.stamp.fromSec(reset_duration);
-                
-                presetPub_.publish(preset);
-                ROS_INFO("=== LT+RT+START: Reset to ZERO, transitioning to STANDBY ===");
-                
-                ros::Duration(reset_duration).sleep();
-                currentState = STANDBY;
-                ROS_INFO("=== State changed: %s (press LT+RT+LB to toggle RUNNING) ===", stateNames[currentState]);
+                if (currentState_ == NOT_READY) {
+                    last_trigger = ros::Time::now();
+                    
+                    double reset_duration = 2.0;
+                    nh_->param("reset_duration", reset_duration, reset_duration);
+                    
+                    sensor_msgs::JointState preset;
+                    preset.header.frame_id = "zero";
+                    preset.header.stamp.fromSec(reset_duration);
+                    
+                    presetPub_.publish(preset);
+                    ROS_INFO("=== LT+RT+START: Sending ZERO command (%.1fs), entering RL mode ===", reset_duration);
+                    
+                    ros::Duration(reset_duration).sleep();
+                    currentState_ = STANDBY;
+                    ROS_INFO("=== Entered RL mode: %s (press LT+RT+LB to toggle RUNNING) ===", stateNames[currentState_]);
+                } else {
+                    ROS_WARN("LT+RT+START only works in NOT_READY state. Current state: %s", stateNames[currentState_]);
+                }
             }
             
+            // LT+RT+LB: 在 STANDBY 和 RUNNING 之间切换（仅在 RL 模式下）
             if (trigger_toggle && (ros::Time::now() - last_trigger).toSec() > 1.0) {
-                last_trigger = ros::Time::now();
-                
-                if (currentState == STANDBY) {
-                    currentState = RUNNING;
-                    ROS_INFO("=== LT+RT+LB: State changed to %s (policy inference enabled) ===", stateNames[currentState]);
-                } else if (currentState == RUNNING) {
-                    currentState = STANDBY;
-                    ROS_INFO("=== LT+RT+LB: State changed to %s (policy inference disabled, legs send zero) ===", stateNames[currentState]);
+                if (currentState_ == STANDBY || currentState_ == RUNNING) {
+                    last_trigger = ros::Time::now();
+                    
+                    if (currentState_ == STANDBY) {
+                        currentState_ = RUNNING;
+                        ROS_INFO("=== LT+RT+LB: %s -> %s (policy inference enabled) ===", 
+                                stateNames[STANDBY], stateNames[RUNNING]);
+                    } else if (currentState_ == RUNNING) {
+                        currentState_ = STANDBY;
+                        ROS_INFO("=== LT+RT+LB: %s -> %s (policy inference disabled, legs send offset only) ===", 
+                                stateNames[RUNNING], stateNames[STANDBY]);
+                    }
+                } else {
+                    ROS_WARN("LT+RT+LB only works in RL mode (STANDBY/RUNNING). Current state: %s", stateNames[currentState_]);
                 }
             }
         } else {
             static int no_joy_count = 0;
             if (++no_joy_count % 100 == 0) {
-                ROS_WARN("Joystick not ready! State=%s", stateNames[currentState]);
+                ROS_WARN("Joystick not ready! State=%s", stateNames[currentState_]);
             }
         }
 
-        if (currentState == NOT_READY) {
+        if (currentState_ == NOT_READY) {
             rate.sleep();
             continue;
         }
  
-        // ========== 准备22维关节指令 ==========
         sensor_msgs::JointState msg;
         msg.header.stamp = ros::Time(0);
-        msg.position.resize(22);
-
-        // ========== 1. 腿部12个关节（按策略输出顺序：0-11）==========
-        // 极性（方向系数）：左腿6个 + 右腿6个
-        const int leg_direction[12] = {
-             1,  1, -1, -1,  1,  1,    // 左腿：hip_pitch, hip_roll, thigh, calf, ankle_pitch, ankle_roll
-            -1,  1, -1,  1, -1,  1     // 右腿：hip_pitch, hip_roll, thigh, calf, ankle_pitch, ankle_roll
-        };
         
-        // 零位偏置（URDF offset）：左腿6个 + 右腿6个
-        const double leg_offset[12] = {
-            -0.25, 0.00, 0.00, 0.65, -0.40, 0.00,  // 左腿
-            -0.25, 0.00, 0.00, 0.65, -0.40, 0.00   // 右腿
-        };
+       
 
-        // 计算腿部输出：(基础值 * 极性) + offset
-        // STANDBY: 基础值=0，RUNNING: 基础值=策略输出
-        for (int i = 0; i < 12; ++i) {
-            double base_value = (currentState == RUNNING) ? action_[i] : 0.0;
-            msg.position[i] = (base_value + leg_offset[i]) * leg_direction[i];
-        }
-
-        // ========== 2. 左臂4个关节（索引：12-15）==========
-        static std::vector<double> left_arm_cmd = {1.95, -1.57, 1.57, -1.57};
-        nh_->param<std::vector<double>>("left_arm_cmd", left_arm_cmd, left_arm_cmd);
-        
-        const int left_arm_direction[4] = {1, -1, -1, -1};
-        for (int i = 0; i < 4; ++i) {
-            double cmd = (i < (int)left_arm_cmd.size() ? left_arm_cmd[i] : 0.0);
-            msg.position[12 + i] = cmd * left_arm_direction[i];
-        }
-
-        // ========== 3. 右臂4个关节（索引：16-19）==========
-        static std::vector<double> right_arm_cmd = {1.95, 1.57, -1.57, -1.57};
-        nh_->param<std::vector<double>>("right_arm_cmd", right_arm_cmd, right_arm_cmd);
-        
-        const int right_arm_direction[4] = {-1, -1, -1, 1};
-        for (int i = 0; i < 4; ++i) {
-            double cmd = (i < (int)right_arm_cmd.size() ? right_arm_cmd[i] : 0.0);
-            msg.position[16 + i] = cmd * right_arm_direction[i];
-        }
-
-        // ========== 4. 头部2个关节（索引：20-21）==========
-        static std::vector<double> head_cmd(2, 0.0);
-        nh_->param<std::vector<double>>("head_cmd", head_cmd, head_cmd);
-        
-        for (int i = 0; i < 2; ++i) {
-            msg.position[20 + i] = (i < (int)head_cmd.size() ? head_cmd[i] : 0.0);
-        }
-
-        jointCmdPub_.publish(msg);
-        
-        static int log_count = 0;
-        if (++log_count % 50 == 0) {
-            std::ostringstream oss;
-            oss.setf(std::ios::fixed);
-            oss.precision(3);
-            oss << "State=" << stateNames[currentState] << " | pub /" << modelType_ << "_all [";
-            for (int i = 0; i < 22; ++i) {
-                if (i) oss << ", ";
-                oss << msg.position[i];
+        if (currentState_ == STANDBY) {
+            msg.position.resize(22);
+            for (int i = 0; i < 12; ++i) {
+                // msg.position[i] = action_[i];
+                msg.position[i] = 0;
             }
-            oss << "]";
-            ROS_INFO("%s", oss.str().c_str());
+            for (int i = 12; i < 22; ++i) {
+                msg.position[i] = 0.0;
+            }
+        } else if (currentState_ == RUNNING) {
+            msg.position.resize(22);
+            for (int i = 0; i < 12; ++i) {
+                msg.position[i] = action_[i];
+            }
+            for (int i = 12; i < 22; ++i) {
+                msg.position[i] = 0.0;
+            }
         }
         
+        jointCmdPub_.publish(msg);
         rate.sleep();
     }
     ROS_INFO("=== Inference loop stopped ===");
