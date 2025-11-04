@@ -7,9 +7,12 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   sensor_msgs
   geometry_msgs
+  roslib
 )
 
 find_package(Eigen3 REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(YAMLCPP REQUIRED yaml-cpp)
 
 catkin_package(
   INCLUDE_DIRS include
@@ -21,6 +24,7 @@ include_directories(
   include
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
+  ${YAMLCPP_INCLUDE_DIRS}
 )
 
 # Force ARM (RKNN) only build
@@ -36,6 +40,7 @@ add_library(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
   ${catkin_LIBRARIES}
   ${INFERENCE_LIBS}
+  ${YAMLCPP_LIBRARIES}
 )
 
 add_executable(${PROJECT_NAME}_node

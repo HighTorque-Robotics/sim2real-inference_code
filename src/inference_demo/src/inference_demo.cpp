@@ -5,6 +5,8 @@
 #include <atomic>
 #include <sensor_msgs/Joy.h>
 #include <sstream>
+#include <yaml-cpp/yaml.h>
+#include <ros/package.h>
 
 namespace inference_demo
 {
@@ -66,31 +68,105 @@ static unsigned char* readFileData(const char* filename, int* modelSize)
 InferenceDemo::InferenceDemo(std::shared_ptr<ros::NodeHandle> nh)
     : nh_(nh), quit_(false), stateReceived_(false), imuReceived_(false)
 {
-    nh_->param<std::string>("model_type", modelType_, "pi_plus");
-    nh_->param<std::string>("policy_path", policyPath_, "policy.rknn");
-    nh_->param<int>("num_actions", numActions_, 12);
-    nh_->param<int>("num_single_obs", numSingleObs_, 36);
-    nh_->param<int>("frame_stack", frameStack_, 1);
-    nh_->param<double>("rl_ctrl_freq", rlCtrlFreq_, 100.0);
-    nh_->param<double>("clip_obs", clipObs_, 18.0);
-
-    nh_->param<double>("cmd_lin_vel_scale", cmdLinVelScale_, 1.0);
-    nh_->param<double>("cmd_ang_vel_scale", cmdAngVelScale_, 1.25);
-    nh_->param<double>("rbt_lin_pos_scale", rbtLinPosScale_, 1.0);
-    nh_->param<double>("rbt_lin_vel_scale", rbtLinVelScale_, 1.0);
-    nh_->param<double>("rbt_ang_vel_scale", rbtAngVelScale_, 1.0);
-    nh_->param<double>("action_scale", actionScale_, 1.0);
-
-    std::vector<double> clipLower, clipUpper;
-    nh_->param<std::vector<double>>("clip_actions_lower", clipLower, std::vector<double>(numActions_, -3.14));
-    nh_->param<std::vector<double>>("clip_actions_upper", clipUpper, std::vector<double>(numActions_, 3.14));
-
-    clipActionsLower_.resize(numActions_);
-    clipActionsUpper_.resize(numActions_);
-    for (int i = 0; i < numActions_; ++i)
-    {
-        clipActionsLower_[i] = static_cast<float>(clipLower[i]);
-        clipActionsUpper_[i] = static_cast<float>(clipUpper[i]);
+    ROS_INFO("=== Loading configuration from YAML ===");
+    
+    // 获取配置文件路径
+    std::string pkg_path = ros::package::getPath("inference_demo");
+    std::string config_file = pkg_path + "/config_example.yaml";
+    
+    // 从参数服务器获取配置文件路径（可选覆盖）
+    nh_->param<std::string>("config_file", config_file, config_file);
+    
+    ROS_INFO("Loading config from: %s", config_file.c_str());
+    
+    try {
+        YAML::Node config = YAML::LoadFile(config_file);
+        
+        // 读取基本参数（使用正确的默认值）
+        numActions_ = config["num_actions"].as<int>(12);
+        numSingleObs_ = config["num_single_obs"].as<int>(36);
+        frameStack_ = config["frame_stack"].as<int>(1);
+        clipObs_ = config["clip_obs"].as<double>(18.0);
+        
+        // 读取策略名称并构建完整路径
+        std::string policyName = config["policy_name"].as<std::string>("policy_0322_12dof_4000.rknn");
+        policyPath_ = pkg_path + "/policy/" + policyName;
+        
+        // 读取控制频率
+        double dt = config["dt"].as<double>(0.001);
+        int decimation = config["decimation"].as<int>(10);
+        rlCtrlFreq_ = 1.0 / (dt * decimation);
+        
+        // 读取缩放参数（使用正确的默认值）
+        cmdLinVelScale_ = config["cmd_lin_vel_scale"].as<double>(1.0);
+        cmdAngVelScale_ = config["cmd_ang_vel_scale"].as<double>(1.25);
+        rbtLinPosScale_ = config["rbt_lin_pos_scale"].as<double>(1.0);
+        rbtLinVelScale_ = config["rbt_lin_vel_scale"].as<double>(1.0);
+        rbtAngVelScale_ = config["rbt_ang_vel_scale"].as<double>(1.0);
+        actionScale_ = config["action_scale"].as<double>(1.0);
+        
+        // 读取动作限制
+        std::vector<double> clipLower = config["clip_actions_lower"].as<std::vector<double>>();
+        std::vector<double> clipUpper = config["clip_actions_upper"].as<std::vector<double>>();
+        
+        // 读取电机配置
+        if (config["motor_direction"]) {
+            motorDirection_ = config["motor_direction"].as<std::vector<int>>();
+        }
+        if (config["urdf_dof_pos_offset"]) {
+            urdfOffset_ = config["urdf_dof_pos_offset"].as<std::vector<double>>();
+        }
+        if (config["map_index"]) {
+            actualToPolicyMap_ = config["map_index"].as<std::vector<int>>();
+        }
+        
+        // 模型类型（可从launch文件覆盖）
+        nh_->param<std::string>("model_type", modelType_, "pi_plus");
+        
+        ROS_INFO("YAML config loaded successfully:");
+        ROS_INFO("  num_actions: %d", numActions_);
+        ROS_INFO("  num_single_obs: %d", numSingleObs_);
+        ROS_INFO("  frame_stack: %d", frameStack_);
+        ROS_INFO("  rl_ctrl_freq: %.1f Hz", rlCtrlFreq_);
+        ROS_INFO("  policy_path: %s", policyPath_.c_str());
+        ROS_INFO("  action_scale: %.2f", actionScale_);
+        
+        clipActionsLower_.resize(numActions_);
+        clipActionsUpper_.resize(numActions_);
+        for (int i = 0; i < numActions_ && i < (int)clipLower.size(); ++i) {
+            clipActionsLower_[i] = static_cast<float>(clipLower[i]);
+            clipActionsUpper_[i] = static_cast<float>(clipUpper[i]);
+        }
+        
+    } catch (const YAML::Exception& e) {
+        ROS_ERROR("YAML parsing error: %s", e.what());
+        ROS_ERROR("Using default parameters from original launch file");
+        
+        // 使用 launch 文件中的正确默认值
+        numActions_ = 12;
+        numSingleObs_ = 36;
+        frameStack_ = 1;
+        rlCtrlFreq_ = 100.0;
+        clipObs_ = 18.0;
+        cmdLinVelScale_ = 1.0;
+        cmdAngVelScale_ = 1.25;
+        rbtLinPosScale_ = 1.0;
+        rbtLinVelScale_ = 1.0;
+        rbtAngVelScale_ = 1.0;
+        actionScale_ = 1.0;
+        policyPath_ = pkg_path + "/policy/policy_0322_12dof_4000.rknn";
+        modelType_ = "pi_plus";
+        stepsPeriod_ = 60.0;
+        
+        // launch 文件中的正确限位
+        std::vector<float> lower = {-1.00, -0.40, -0.60, -1.30, -0.75, -0.30, -1.00, -0.40, -0.60, -1.30, -0.75, -0.30};
+        std::vector<float> upper = {1.00,  0.40,  0.60,  1.30,  0.75,  0.30, 1.00,  0.40,  0.60,  1.30,  0.75,  0.30};
+        clipActionsLower_ = lower;
+        clipActionsUpper_ = upper;
+        
+        // launch 文件中的电机配置
+        motorDirection_ = {1, 1, -1, -1, 1, 1, -1, 1, -1, 1, -1, 1};
+        actualToPolicyMap_ = {5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6};
     }
 
     robotJointPositions_ = Eigen::VectorXd::Zero(numActions_);

@@ -1,32 +1,10 @@
 <?xml version="1.0"?>
 <launch>
   <node name="inference_demo_node" pkg="inference_demo" type="inference_demo_node" output="screen">
+    <!-- 可选：指定配置文件路径，默认使用 config_example.yaml -->
+    <!-- <param name="config_file" value="$(find inference_demo)/config_example.yaml"/> -->
+    
+    <!-- 可选：覆盖模型类型 -->
     <param name="model_type" value="pi_plus"/>
-    <param name="policy_path" value="$(find inference_demo)/policy/policy_0322_12dof_4000.rknn"/>
-    <param name="num_actions" value="12"/>
-    <param name="num_single_obs" value="36"/>
-    <param name="frame_stack" value="1"/>
-    <param name="rl_ctrl_freq" value="100.0"/>
-    <param name="steps_period" value="60.0"/>
-    <param name="clip_obs" value="18.0"/>
-    
-    <param name="cmd_lin_vel_scale" value="1.0"/>
-    <param name="cmd_ang_vel_scale" value="1.25"/>
-    <param name="rbt_lin_pos_scale" value="1.0"/>
-    <param name="rbt_lin_vel_scale" value="1.0"/>
-    <param name="rbt_ang_vel_scale" value="1.0"/>
-    
-    <rosparam param="clip_actions_lower">[-1.00, -0.40, -0.60, -1.30, -0.75, -0.30, -1.00, -0.40, -0.60, -1.30, -0.75, -0.30]</rosparam>
-    <rosparam param="clip_actions_upper">[1.00,  0.40,  0.60,  1.30,  0.75,  0.30, 1.00,  0.40,  0.60,  1.30,  0.75,  0.30]</rosparam>
-    
-    <!-- Motor direction for polarity correction (from pd_config_develop.yaml, first 12 joints) -->
-    <rosparam param="motor_direction">[1, 1, -1, -1, 1, 1, -1, 1, -1, 1, -1, 1]</rosparam>
-    
-    <!-- Joint order mapping for INPUT data: mtr_state (L-R) to policy (R-L) -->
-    <!-- This ensures input joint order matches the order used during policy training -->
-    <!-- pd_config: [L0,L1,L2,L3,L4,L5, R0,R1,R2,R3,R4,R5] -->
-    <!-- footstep_jz: [R0,R1,R2,R3,R4,R5, L0,L1,L2,L3,L4,L5] -->
-    <!-- actual[i] maps to policy[actualToPolicyMap[i]] -->
-    <rosparam param="actual_to_policy_map">[5,  4,  3,  2,  1,  0, 11, 10,  9,  8,  7,  6]</rosparam>
   </node>
 </launch>
