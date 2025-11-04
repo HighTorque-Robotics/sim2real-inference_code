@@ -60,6 +60,7 @@ private:
     double rbtLinPosScale_;
     double rbtLinVelScale_;
     double rbtAngVelScale_;
+    double actionScale_;
 
     std::vector<float> clipActionsLower_;
     std::vector<float> clipActionsUpper_;

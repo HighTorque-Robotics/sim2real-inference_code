@@ -79,6 +79,7 @@ InferenceDemo::InferenceDemo(std::shared_ptr<ros::NodeHandle> nh)
     nh_->param<double>("rbt_lin_pos_scale", rbtLinPosScale_, 1.0);
     nh_->param<double>("rbt_lin_vel_scale", rbtLinVelScale_, 1.0);
     nh_->param<double>("rbt_ang_vel_scale", rbtAngVelScale_, 1.0);
+    nh_->param<double>("action_scale", actionScale_, 1.0);
 
     std::vector<double> clipLower, clipUpper;
     nh_->param<std::vector<double>>("clip_actions_lower", clipLower, std::vector<double>(numActions_, -3.14));
@@ -154,7 +155,7 @@ bool InferenceDemo::init()
     nh_->param<std::string>("joy_topic", joy_topic, joy_topic);
     static ros::Subscriber joy_sub = nh_->subscribe(joy_topic, 10, joyCallback);
 
-    ros::Rate rate(10);
+    ros::Rate rate(100);
     int timeout = 50;
     while (ros::ok() && (!stateReceived_ || !imuReceived_) && timeout > 0)
     {
@@ -462,8 +463,17 @@ void InferenceDemo::run()
         msg.header.stamp = ros::Time(0);
         
         msg.position.resize(22);
+        // 根据状态决定 action 缩放因子：RUNNING 时用 actionScale_，其他状态用 0.05
+        double scale = (currentState_ == RUNNING) ? actionScale_ : 0.05;
+        
+        static int debug_count = 0;
+        if (++debug_count % 10 == 0) {
+            ROS_INFO("[STATE DEBUG] currentState=%s, scale=%.2f (actionScale_=%.2f)", 
+                     stateNames[currentState_], scale, actionScale_);
+        }
+        
         for (int i = 0; i < 12; ++i) {
-            msg.position[i] = action_[i];
+            msg.position[i] = action_[i] * scale;
         }
         for (int i = 12; i < 22; ++i) {
             msg.position[i] = 0.0;
