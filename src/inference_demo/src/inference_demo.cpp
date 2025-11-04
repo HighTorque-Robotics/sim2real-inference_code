@@ -11,12 +11,12 @@
 namespace inference_demo
 {
 
-    static std::atomic<bool> g_joy_ready(false);
-    static sensor_msgs::Joy g_joy_msg;
+    static std::atomic<bool> gJoyReady(false);
+    static sensor_msgs::Joy gJoyMsg;
     static void joyCallback(const sensor_msgs::Joy::ConstPtr& msg)
     {
-        g_joy_msg = *msg;
-        g_joy_ready.store(true);
+        gJoyMsg = *msg;
+        gJoyReady.store(true);
     }
 
     static unsigned char* loadData(FILE* fp, size_t ofst, size_t sz)
@@ -76,17 +76,17 @@ namespace inference_demo
         ROS_INFO("=== Loading configuration from YAML ===");
 
         // 获取配置文件路径
-        std::string pkg_path = ros::package::getPath("inference_demo");
-        std::string config_file = pkg_path + "/config_example.yaml";
+        std::string pkgPath = ros::package::getPath("inference_demo");
+        std::string configFile = pkgPath + "/config_example.yaml";
 
         // 从参数服务器获取配置文件路径（可选覆盖）
-        nh_->param<std::string>("config_file", config_file, config_file);
+        nh_->param<std::string>("config_file", configFile, configFile);
 
-        ROS_INFO("Loading config from: %s", config_file.c_str());
+        ROS_INFO("Loading config from: %s", configFile.c_str());
 
         try
         {
-            YAML::Node config = YAML::LoadFile(config_file);
+            YAML::Node config = YAML::LoadFile(configFile);
 
             // 读取基本参数（使用正确的默认值）
             numActions_ = config["num_actions"].as<int>(12);
@@ -96,7 +96,7 @@ namespace inference_demo
 
             // 读取策略名称并构建完整路径
             std::string policyName = config["policy_name"].as<std::string>("policy_0322_12dof_4000.rknn");
-            policyPath_ = pkg_path + "/policy/" + policyName;
+            policyPath_ = pkgPath + "/policy/" + policyName;
 
             // 读取控制频率
             double dt = config["dt"].as<double>(0.001);
@@ -165,7 +165,7 @@ namespace inference_demo
             rbtLinVelScale_ = 1.0;
             rbtAngVelScale_ = 1.0;
             actionScale_ = 1.0;
-            policyPath_ = pkg_path + "/policy/policy_0322_12dof_4000.rknn";
+            policyPath_ = pkgPath + "/policy/policy_0322_12dof_4000.rknn";
             modelType_ = "pi_plus";
             stepsPeriod_ = 60.0;
 
@@ -312,13 +312,13 @@ namespace inference_demo
         observations_[0] = currentState_ == STANDBY ? 1.0 : std::sin(2 * M_PI * step_);
         observations_[1] = currentState_ == STANDBY ? -1.0 : std::cos(2 * M_PI * step_);
 
-        double cmd_x = currentState_ == STANDBY ? 0.0 : command_[0];
-        double cmd_y = currentState_ == STANDBY ? 0.0 : command_[1];
-        double cmd_yaw = currentState_ == STANDBY ? 0.0 : command_[2];
+        double cmdX = currentState_ == STANDBY ? 0.0 : command_[0];
+        double cmdY = currentState_ == STANDBY ? 0.0 : command_[1];
+        double cmdYaw = currentState_ == STANDBY ? 0.0 : command_[2];
 
-        observations_[2] = cmd_x * cmdLinVelScale_ * (cmd_x < 0 ? 0.5 : 1.0);
-        observations_[3] = cmd_y * cmdLinVelScale_;
-        observations_[4] = cmd_yaw * cmdAngVelScale_;
+        observations_[2] = cmdX * cmdLinVelScale_ * (cmdX < 0 ? 0.5 : 1.0);
+        observations_[3] = cmdY * cmdLinVelScale_;
+        observations_[4] = cmdYaw * cmdAngVelScale_;
         std::unique_lock<std::shared_timed_mutex> lk(mutex_);
 
         observations_.segment(5, numActions_) = robotJointPositions_ * rbtLinPosScale_;
@@ -466,7 +466,7 @@ namespace inference_demo
     {
         ros::Rate rate(rlCtrlFreq_);
         const char* stateNames[] = {"NOT_READY", "STANDBY", "RUNNING"};
-        static ros::Time last_trigger(0);
+        static ros::Time lastTrigger(0);
 
         while (ros::ok() && !quit_)
         {
@@ -478,7 +478,7 @@ namespace inference_demo
                 updateAction();
             }
 
-            if (g_joy_ready.load())
+            if (gJoyReady.load())
             {
                 int axis2 = 2, axis5 = 5, btn_start = 7, btn_lb = 4;
                 nh_->param("joy_axis2", axis2, axis2);
@@ -486,20 +486,20 @@ namespace inference_demo
                 nh_->param("joy_button_start", btn_start, btn_start);
                 nh_->param("joy_button_lb", btn_lb, btn_lb);
 
-                bool lt_pressed = (axis2 >= 0 && axis2 < (int)g_joy_msg.axes.size()) && (std::abs(g_joy_msg.axes[axis2]) > 0.8);
-                bool rt_pressed = (axis5 >= 0 && axis5 < (int)g_joy_msg.axes.size()) && (std::abs(g_joy_msg.axes[axis5]) > 0.8);
-                bool start_pressed = (btn_start >= 0 && btn_start < (int)g_joy_msg.buttons.size()) && (g_joy_msg.buttons[btn_start] == 1);
-                bool lb_pressed = (btn_lb >= 0 && btn_lb < (int)g_joy_msg.buttons.size()) && (g_joy_msg.buttons[btn_lb] == 1);
+                bool ltPressed = (axis2 >= 0 && axis2 < (int)gJoyMsg.axes.size()) && (std::abs(gJoyMsg.axes[axis2]) > 0.8);
+                bool rtPressed = (axis5 >= 0 && axis5 < (int)gJoyMsg.axes.size()) && (std::abs(gJoyMsg.axes[axis5]) > 0.8);
+                bool startPressed = (btn_start >= 0 && btn_start < (int)gJoyMsg.buttons.size()) && (gJoyMsg.buttons[btn_start] == 1);
+                bool lbPressed = (btn_lb >= 0 && btn_lb < (int)gJoyMsg.buttons.size()) && (gJoyMsg.buttons[btn_lb] == 1);
 
-                bool trigger_reset = lt_pressed && rt_pressed && start_pressed;
-                bool trigger_toggle = lt_pressed && rt_pressed && lb_pressed;
+                bool triggerReset = ltPressed && rtPressed && startPressed;
+                bool triggerToggle = ltPressed && rtPressed && lbPressed;
 
                 // LT+RT+START: 从 NOT_READY 进入 RL 模式（STANDBY）
-                if (trigger_reset && (ros::Time::now() - last_trigger).toSec() > 1.0)
+                if (triggerReset && (ros::Time::now() - lastTrigger).toSec() > 1.0)
                 {
                     if (currentState_ == NOT_READY)
                     {
-                        last_trigger = ros::Time::now();
+                        lastTrigger = ros::Time::now();
 
                         double reset_duration = 2.0;
                         nh_->param("reset_duration", reset_duration, reset_duration);
@@ -514,11 +514,11 @@ namespace inference_demo
                     }
                 }
 
-                if (trigger_toggle && (ros::Time::now() - last_trigger).toSec() > 1.0)
+                if (triggerToggle && (ros::Time::now() - lastTrigger).toSec() > 1.0)
                 {
                     if (currentState_ == STANDBY || currentState_ == RUNNING)
                     {
-                        last_trigger = ros::Time::now();
+                        lastTrigger = ros::Time::now();
 
                         if (currentState_ == STANDBY)
                         {
@@ -545,8 +545,8 @@ namespace inference_demo
             // 根据状态决定 action 缩放因子：RUNNING 时用 actionScale_，其他状态用 0.05
             double scale = (currentState_ == RUNNING) ? actionScale_ : 0.05;
 
-            static int debug_count = 0;
-            if (++debug_count % 10 == 0)
+            static int debugCount = 0;
+            if (++debugCount % 10 == 0)
             {
                 ROS_INFO("[STATE DEBUG] currentState=%s, scale=%.2f (actionScale_=%.2f)",
                          stateNames[currentState_], scale, actionScale_);
