@@ -244,21 +244,6 @@ void InferenceDemo::updateObservation()
 
     histObs_.push_back(observations_);
     histObs_.pop_front();
-
-    static int print_obs_count = 0;
-    if (++print_obs_count % 10 == 0) {
-        ROS_INFO("[INFERENCE_DEMO OBS] phase=[%.4f, %.4f]", observations_[0], observations_[1]);
-        std::ostringstream obs_line;
-        obs_line.setf(std::ios::fixed);
-        obs_line.precision(4);
-        obs_line << "obs=[";
-        for (int i = 0; i < numSingleObs_; ++i) {
-            if (i) obs_line << ", ";
-            obs_line << observations_[i];
-        }
-        obs_line << "]";
-        ROS_INFO("%s", obs_line.str().c_str());
-    }
 }
 
 void InferenceDemo::updateAction()
@@ -283,19 +268,6 @@ void InferenceDemo::updateAction()
         action_[i] = std::clamp(outputData[i], clipActionsLower_[i], clipActionsUpper_[i]);
     }
 
-    static int print_count = 0;
-    if (++print_count % 10 == 0) {
-        std::ostringstream line;
-        line.setf(std::ios::fixed);
-        line.precision(4);
-        line << "[POLICY OUTPUT] action=[";
-        for (int i = 0; i < numActions_; ++i) {
-            if (i) line << ", ";
-            line << action_[i];
-        }
-        line << "]";
-        ROS_INFO("%s", line.str().c_str());
-    }
     
     rknn_outputs_release(ctx_, ioNum_.n_output, rknnOutputs_);
 }
