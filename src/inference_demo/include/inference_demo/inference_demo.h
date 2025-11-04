@@ -32,7 +32,6 @@ private:
     void updateObservation();
     void updateAction();
     void quat2euler();
-    Eigen::Vector3d quatRotateInverse(const Eigen::Vector4d& q, const Eigen::Vector3d& v);
 
     void robotStateCallback(const sensor_msgs::JointState::ConstPtr& msg);
     void motorStateCallback(const sensor_msgs::JointState::ConstPtr& msg);
@@ -91,10 +90,6 @@ private:
 
     double stepsPeriod_;
     double step_;
-    bool isMoving_;
-    bool completingCycle_;
-    double lastPitch_;
-    double lastRoll_;
 
     bool quit_;
     bool stateReceived_;
