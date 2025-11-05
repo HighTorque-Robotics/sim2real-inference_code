@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<launch>
+  <node name="hightorque_rl_inference_node" 
+        pkg="hightorque_rl_inference" 
+        type="hightorque_rl_inference_node" 
+        output="screen">
+    
+    <!-- 可选：指定配置文件路径，默认使用 config_example.yaml -->
+    <!-- Optional: Specify config file path, defaults to config_example.yaml -->
+    <!-- <param name="config_file" value="$(find hightorque_rl_inference)/config_example.yaml"/> -->
+    
+    <!-- 可选：覆盖模型类型 -->
+    <!-- Optional: Override model type -->
+    <param name="model_type" value="pi_plus"/>
+  </node>
+</launch>
+

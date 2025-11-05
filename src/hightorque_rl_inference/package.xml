@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>hightorque_rl_inference</name>
+  <version>1.0.0</version>
+  
+  <description>
+    HighTorque RL Inference Package
+    高擎机电强化学习推理功能包
+    
+    A ROS1 package for deploying reinforcement learning policies on humanoid robots
+    using RKNN (Rockchip Neural Network) inference engine. Provides real-time control
+    at 100Hz with comprehensive observation processing and action generation.
+    
+    用于在人形机器人上部署强化学习策略的 ROS1 功能包，
+    使用 RKNN（Rockchip Neural Network）推理引擎。
+    提供 100Hz 实时控制，具有完整的观测处理和动作生成。
+    
+    Developed by 高擎机电 (HighTorque Robotics)
+  </description>
+  
+  <maintainer email="support@hightorque-robotics.com">高擎机电 (HighTorque Robotics)</maintainer>
+  
+  <license>Apache-2.0</license>
+  
+  <url type="website">https://www.hightorque-robotics.com</url>
+  <url type="repository">https://github.com/HighTorque-Robotics/hightorque_rl_custom</url>
+  <url type="bugtracker">https://github.com/HighTorque-Robotics/hightorque_rl_custom/issues</url>
+  
+  <author email="dev@hightorque-robotics.com">高擎机电研发团队 (HighTorque Robotics Development Team)</author>
+
+  <!-- Build tool dependency -->
+  <buildtool_depend>catkin</buildtool_depend>
+  
+  <!-- ROS package dependencies -->
+  <depend>roscpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>roslib</depend>
+  
+  <!-- System dependencies -->
+  <depend>eigen</depend>
+  <depend>yaml-cpp</depend>
+
+  <export>
+  </export>
+</package>
