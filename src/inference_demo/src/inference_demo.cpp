@@ -465,7 +465,6 @@ namespace inference_demo
     void InferenceDemo::run()
     {
         ros::Rate rate(rlCtrlFreq_);
-        const char* stateNames[] = {"NOT_READY", "STANDBY", "RUNNING"};
         static ros::Time lastTrigger(0);
 
         while (ros::ok() && !quit_)
@@ -544,13 +543,6 @@ namespace inference_demo
             msg.position.resize(22);
             // 根据状态决定 action 缩放因子：RUNNING 时用 actionScale_，其他状态用 0.05
             double scale = (currentState_ == RUNNING) ? actionScale_ : 0.05;
-
-            static int debugCount = 0;
-            if (++debugCount % 10 == 0)
-            {
-                ROS_INFO("[STATE DEBUG] currentState=%s, scale=%.2f (actionScale_=%.2f)",
-                         stateNames[currentState_], scale, actionScale_);
-            }
 
             for (int i = 0; i < 12; ++i)
             {
