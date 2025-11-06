@@ -88,16 +88,13 @@ This is an open-source ROS1-based reinforcement learning inference demonstration
 
 1. **Create a catkin workspace** (if you don't have one):
 ```bash
-mkdir -p ~/catkin_ws/src
+mkdir -p ~/catkin_ws
 cd ~/catkin_ws
-catkin_make
-source devel/setup.bash
 ```
 
 2. **Clone this repository**:
 ```bash
-cd ~/catkin_ws/src
-git clone https://github.com/HighTorque-Robotics/hightorque_rl_custom.git
+git clone https://github.com/HighTorque-Robotics/sim2real-inference_code.git
 ```
 
 3. **Install dependencies**:
@@ -109,15 +106,14 @@ sudo apt-get install ros-noetic-sensor-msgs ros-noetic-geometry-msgs \
 
 4. **Build the package**:
 ```bash
-cd ~/catkin_ws
-catkin_make
-# Or using catkin build
-catkin build hightorque_rl_inference
+cd ~/catkin_ws/sim2real-inference_code/
+catkin init
+catkin build
 ```
 
 5. **Source the workspace**:
 ```bash
-source ~/catkin_ws/devel/setup.bash
+source devel/setup.bash
 ```
 
 ### Quick Start
@@ -133,7 +129,7 @@ First, ensure your robot is running and in developer mode. This should start the
 
 Edit the configuration file to match your robot and policy:
 ```bash
-cd ~/catkin_ws/src/hightorque_rl_custom/src/hightorque_rl_inference
+cd ~/catkin_ws/sim2real-inference_code/
 nano config_example.yaml
 ```
 
@@ -289,26 +285,6 @@ hightorque_rl_custom/
 └── .gitignore                      # Git ignore rules
 ```
 
-### Contributing
-
-We welcome contributions! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with clear comments
-4. Test thoroughly on real hardware
-5. Submit a pull request
-
-### License
-
-Apache-2.0
-
-### Contact & Support
-
-- **Company**: 高擎机电 (HighTorque Robotics)
-- **Website**: [https://www.hightorque-robotics.com](https://www.hightorque-robotics.com)
-- **Issues**: GitHub Issues
-- **Email**: support@hightorque-robotics.com
-
 ---
 
 ## 中文
@@ -394,16 +370,13 @@ Apache-2.0
 
 1. **创建 catkin 工作空间**（如果还没有）：
 ```bash
-mkdir -p ~/catkin_ws/src
+mkdir -p ~/catkin_ws
 cd ~/catkin_ws
-catkin_make
-source devel/setup.bash
 ```
 
 2. **克隆本仓库**：
 ```bash
-cd ~/catkin_ws/src
-git clone https://github.com/HighTorque-Robotics/hightorque_rl_custom.git
+git clone https://github.com/HighTorque-Robotics/sim2real-inference_code.git
 ```
 
 3. **安装依赖**：
@@ -415,15 +388,14 @@ sudo apt-get install ros-noetic-sensor-msgs ros-noetic-geometry-msgs \
 
 4. **编译功能包**：
 ```bash
-cd ~/catkin_ws
-catkin_make
-# 或者使用 catkin build
-catkin build hightorque_rl_inference
+cd ~/catkin_ws/sim2real-inference_code/
+catkin init
+catkin build
 ```
 
 5. **加载工作空间环境**：
 ```bash
-source ~/catkin_ws/devel/setup.bash
+source devel/setup.bash
 ```
 
 ### 快速开始
@@ -439,7 +411,7 @@ source ~/catkin_ws/devel/setup.bash
 
 编辑配置文件以匹配你的机器人和策略：
 ```bash
-cd ~/catkin_ws/src/hightorque_rl_custom/src/hightorque_rl_inference
+cd ~/catkin_ws/sim2real-inference_code/
 nano config_example.yaml
 ```
 
@@ -594,30 +566,3 @@ hightorque_rl_custom/
 ├── README.md                       # 本文件
 └── .gitignore                      # Git 忽略规则
 ```
-
-### 贡献
-
-我们欢迎贡献！请：
-1. Fork 本仓库
-2. 创建特性分支
-3. 添加清晰的注释
-4. 在真实硬件上充分测试
-5. 提交 Pull Request
-
-### 许可证
-
-Apache-2.0
-
-### 联系与支持
-
-- **公司**：高擎机电（HighTorque Robotics）
-- **官网**：[https://www.hightorque-robotics.com](https://www.hightorque-robotics.com)
-- **问题反馈**：GitHub Issues
-- **邮箱**：support@hightorque-robotics.com
-
----
-
-**开发商**：高擎机电（HighTorque Robotics）  
-**版本**：1.0.0  
-**最后更新**：2025年11月
-
