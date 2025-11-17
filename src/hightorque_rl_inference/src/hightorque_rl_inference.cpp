@@ -296,10 +296,12 @@ namespace hightorque_rl_inference
         std::string presetTopic = "/" + modelType_ + "_preset";
         presetPub_ = nh_->advertise<sensor_msgs::JointState>(presetTopic, 10);
 
-        robotStateSub_ = nh_->subscribe("/sim2real_master_node/rbt_state", 1, &HighTorqueRLInference::robotStateCallback, this);
-        motorStateSub_ = nh_->subscribe("/sim2real_master_node/mtr_state", 50, &HighTorqueRLInference::motorStateCallback, this);
-        imuSub_ = nh_->subscribe("/imu/data", 1, &HighTorqueRLInference::imuCallback, this);
-        cmdVelSub_ = nh_->subscribe("/cmd_vel", 10, &HighTorqueRLInference::cmdVelCallback, this);
+        // 增大订阅队列大小，避免在高频控制（100Hz）下丢失消息
+        // 特别是 robotState 和 IMU 数据，对控制精度至关重要
+        robotStateSub_ = nh_->subscribe("/sim2real_master_node/rbt_state", 100, &HighTorqueRLInference::robotStateCallback, this);
+        motorStateSub_ = nh_->subscribe("/sim2real_master_node/mtr_state", 100, &HighTorqueRLInference::motorStateCallback, this);
+        imuSub_ = nh_->subscribe("/imu/data", 100, &HighTorqueRLInference::imuCallback, this);
+        cmdVelSub_ = nh_->subscribe("/cmd_vel", 50, &HighTorqueRLInference::cmdVelCallback, this);
 
         std::string joy_topic = "/joy";
         nh_->param<std::string>("joy_topic", joy_topic, joy_topic);
