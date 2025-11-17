@@ -138,7 +138,10 @@ Key parameters to configure:
 - `num_actions`: Number of actuated joints (default: 12)
 - `clip_actions_lower/upper`: Joint angle limits for your robot
 - `motor_direction`: Motor rotation directions
-- `map_index`: Joint order mapping
+- `map_index`: **Critical** - Joint order mapping from your policy output to low-level controller expected order
+  - The low-level controller expects: `[L_hip_pitch, L_hip_roll, L_hip_yaw, L_knee, L_ankle_pitch, L_ankle_roll, R_hip_pitch, R_hip_roll, R_hip_yaw, R_knee, R_ankle_pitch, R_ankle_roll]`
+  - If your policy outputs a different order, configure `map_index` to remap: `map_index[i]` = policy output index for controller position `i`
+  - Example: `map_index: [5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6]` reverses the order
 
 #### Step 3: Launch the Inference Node
 
@@ -195,16 +198,148 @@ See [docs/configuration.md](docs/configuration.md) for detailed parameter descri
 
 ### ROS Topics
 
-**Subscribed Topics:**
-- `/sim2real_master_node/rbt_state` (sensor_msgs/JointState) - Robot joint positions and velocities
-- `/sim2real_master_node/mtr_state` (sensor_msgs/JointState) - Motor absolute positions
-- `/imu/data` (sensor_msgs/Imu) - IMU orientation and angular velocity
-- `/cmd_vel` (geometry_msgs/Twist) - Velocity commands
-- `/joy` (sensor_msgs/Joy) - Joystick input
+#### Subscribed Topics (Input Data)
 
-**Published Topics:**
-- `/pi_plus_all` (sensor_msgs/JointState) - Joint position commands
-- `/pi_plus_preset` (sensor_msgs/JointState) - Reset commands
+**1. `/sim2real_master_node/rbt_state`** (sensor_msgs/JointState)
+- **Queue Size:** 100
+- **Publisher:** `LowlevelControllerNode` (low-level controller)
+- **Frequency:** Determined by low-level controller
+- **Data Content:**
+  ```cpp
+  msg->position[0-11]   // 12 joint angles in robot coordinate frame
+  msg->velocity[0-11]   // 12 joint velocities in robot coordinate frame (optional)
+  ```
+
+**2. `/sim2real_master_node/mtr_state`** (sensor_msgs/JointState)
+- **Queue Size:** 100
+- **Publisher:** `LowlevelControllerNode` (low-level controller)
+- **Frequency:** Determined by low-level controller
+- **Data Content:**
+  ```cpp
+  msg->position[0-11]   // 12 joint angles in motor coordinate frame
+  msg->velocity[0-11]   // 12 joint velocities in motor coordinate frame (optional)
+  ```
+
+**3. `/imu/data`** (sensor_msgs/Imu)
+- **Queue Size:** 100
+- **Publisher:** IMU driver node
+- **Frequency:** IMU publish rate (typically 100-200Hz)
+- **Data Content:**
+  ```cpp
+  msg->orientation (quaternion: x, y, z, w)  // Base orientation
+  msg->angular_velocity (x, y, z)            // Base angular velocity
+  ```
+
+**4. `/cmd_vel`** (geometry_msgs/Twist)
+- **Queue Size:** 50
+- **Publisher:** External control node (keyboard, navigation stack, etc.)
+- **Frequency:** Determined by publisher
+- **Data Content:**
+  ```cpp
+  msg->linear.x   // Linear velocity x (forward/backward), limited to [-0.55, 0.55]
+  msg->linear.y   // Linear velocity y (left/right), limited to [-0.3, 0.3]
+  msg->angular.z  // Angular velocity z (rotation), limited to [-2.0, 2.0]
+  ```
+
+**5. `/joy`** (sensor_msgs/Joy)
+- **Queue Size:** 10
+- **Publisher:** Joystick driver node
+- **Data Content:**
+  ```cpp
+  msg->axes[]     // Joystick axes values
+  msg->buttons[]  // Joystick button states
+  ```
+
+#### Published Topics (Output Data)
+
+**1. `/pi_plus_all`** (sensor_msgs/JointState)
+- **Queue Size:** 1000
+- **Subscriber:** `LowlevelControllerNode` (low-level controller)
+- **Publish Frequency:** 100Hz (`rlCtrlFreq_`)
+- **Data Content:**
+  ```cpp
+  msg->position[0-11]   // 12 joint target positions (RL policy output, scaled)
+  msg->position[12-21]  // Other joint positions (set to 0.0)
+  msg->header.stamp     // ros::Time(0) - indicates immediate execution
+  ```
+- **Joint Order (Expected by Low-level Controller):**
+  ```
+  Index:  0    1    2    3    4    5    6    7    8    9    10   11
+  Joint:  L_hip_pitch, L_hip_roll, L_hip_yaw, L_knee, L_ankle_pitch, L_ankle_roll,
+          R_hip_pitch, R_hip_roll, R_hip_yaw, R_knee, R_ankle_pitch, R_ankle_roll
+  ```
+- **Important: Joint Mapping Configuration**
+  - The low-level controller expects joints in the above order
+  - If your RL policy outputs joints in a different order, you **must** configure `map_index` in `config_example.yaml` to map your policy's output order to this expected order
+  - `map_index[i]` specifies which policy output index should be sent to position `i` in `/pi_plus_all`
+  - Example: If your policy outputs `[ankle_roll, ankle_pitch, knee, ...]` but the controller expects `[hip_pitch, hip_roll, ...]`, set `map_index: [5, 4, 3, 2, 1, 0, ...]` to reorder
+
+**2. `/pi_plus_preset`** (sensor_msgs/JointState)
+- **Queue Size:** 10
+- **Subscriber:** `LowlevelControllerNode` (low-level controller)
+- **Publish Frequency:** Only during state transitions (LT+RT+START)
+- **Data Content:**
+  ```cpp
+  msg->header.frame_id = "zero"  // Preset pose name
+  msg->header.stamp.fromSec(2.0) // Duration (seconds)
+  ```
+
+#### Data Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────┐
+│   External Inference Node (hightorque_rl_inference)     │
+│                                                          │
+│   Subscribed Topics:                                    │
+│   ├─ /sim2real_master_node/rbt_state  → Joint states    │
+│   ├─ /sim2real_master_node/mtr_state  → Motor states   │
+│   ├─ /imu/data                        → IMU data        │
+│   ├─ /cmd_vel                          → Velocity cmd    │
+│   └─ /joy                              → Joystick input │
+│                                                          │
+│   Processing:                                           │
+│   1. Build 36-dim observation vector                   │
+│   2. RKNN inference → 12-dim action                    │
+│                                                          │
+│   Published Topics:                                     │
+│   ├─ /pi_plus_all      → Joint commands (100Hz)        │
+│   └─ /pi_plus_preset   → Preset commands (on demand)   │
+└─────────────────────────────────────────────────────────┘
+         ↓                                    ↑
+         │                                    │
+    /pi_plus_all                        /rbt_state, /mtr_state
+         │                                    │
+         ↓                                    ↑
+┌─────────────────────────────────────────────────────────┐
+│   Low-level Controller (LowlevelControllerNode)          │
+│                                                          │
+│   Subscribes: /pi_plus_all → Executes PD control        │
+│   Publishes: /rbt_state, /mtr_state                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### Observation Vector Structure (36 dimensions)
+
+The observation vector is constructed as follows:
+
+- **`observations_[0-1]`**: Gait phase (sin/cos of step counter)
+  - STANDBY: `[1.0, -1.0]`
+  - RUNNING: `[sin(2π*step), cos(2π*step)]`
+
+- **`observations_[2-4]`**: Command velocities (scaled)
+  - `[2]`: Linear velocity x (forward/backward)
+  - `[3]`: Linear velocity y (left/right)
+  - `[4]`: Angular velocity z (rotation)
+
+- **`observations_[5-16]`**: Joint positions (12 DOF, scaled by `rbtLinPosScale_`)
+
+- **`observations_[17-28]`**: Joint velocities (12 DOF, scaled by `rbtLinVelScale_`)
+
+- **`observations_[29-31]`**: Base angular velocity (scaled by `rbtAngVelScale_`)
+
+- **`observations_[32-34]`**: Base orientation (Euler angles: roll, pitch, yaw)
+
+All observations are clipped to `[-clipObs_, clipObs_]` (default: ±18.0).
 
 ### Troubleshooting
 
@@ -420,7 +555,10 @@ nano config_example.yaml
 - `num_actions`: 驱动关节数量（默认：12）
 - `clip_actions_lower/upper`: 机器人的关节角度限制
 - `motor_direction`: 电机旋转方向
-- `map_index`: 关节顺序映射
+- `map_index`: **重要** - 从策略输出到低层控制器期望顺序的关节映射
+  - 低层控制器期望的顺序：`[左髋pitch, 左髋roll, 左髋yaw, 左膝, 左踝pitch, 左踝roll, 右髋pitch, 右髋roll, 右髋yaw, 右膝, 右踝pitch, 右踝roll]`
+  - 如果您的策略输出顺序不同，需要配置 `map_index` 进行重映射：`map_index[i]` = 控制器位置 `i` 对应的策略输出索引
+  - 示例：`map_index: [5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6]` 表示反转顺序
 
 #### 步骤 3：启动推理节点
 
@@ -477,16 +615,147 @@ rostopic pub /cmd_vel geometry_msgs/Twist \
 
 ### ROS 话题
 
-**订阅的话题：**
-- `/sim2real_master_node/rbt_state` (sensor_msgs/JointState) - 机器人关节位置和速度
-- `/sim2real_master_node/mtr_state` (sensor_msgs/JointState) - 电机绝对位置
-- `/imu/data` (sensor_msgs/Imu) - IMU 姿态和角速度
-- `/cmd_vel` (geometry_msgs/Twist) - 速度指令
-- `/joy` (sensor_msgs/Joy) - 手柄输入
+#### 订阅的话题（输入数据）
 
-**发布的话题：**
-- `/pi_plus_all` (sensor_msgs/JointState) - 关节位置指令
-- `/pi_plus_preset` (sensor_msgs/JointState) - 复位指令
+**1. `/sim2real_master_node/rbt_state`** (sensor_msgs/JointState)
+- **队列大小：** 100
+- **发布者：** `LowlevelControllerNode`（低层控制器）
+- **频率：** 由低层控制器决定
+- **数据内容：**
+  ```cpp
+  msg->position[0-11]   // 12个关节在机器人坐标系下的角度
+  msg->velocity[0-11]   // 12个关节在机器人坐标系下的速度（可选）
+  ```
+
+**2. `/sim2real_master_node/mtr_state`** (sensor_msgs/JointState)
+- **队列大小：** 100
+- **发布者：** `LowlevelControllerNode`（低层控制器）
+- **频率：** 由低层控制器决定
+- **数据内容：**
+  ```cpp
+  msg->position[0-11]   // 12个关节在电机坐标系下的角度
+  msg->velocity[0-11]   // 12个关节在电机坐标系下的速度（可选）
+  ```
+
+**3. `/imu/data`** (sensor_msgs/Imu)
+- **队列大小：** 100
+- **发布者：** IMU 驱动节点
+- **频率：** IMU 发布频率（通常 100-200Hz）
+- **数据内容：**
+  ```cpp
+  msg->orientation (四元数: x, y, z, w)  // 基座姿态
+  msg->angular_velocity (x, y, z)        // 基座角速度
+  ```
+
+**4. `/cmd_vel`** (geometry_msgs/Twist)
+- **队列大小：** 50
+- **发布者：** 外部控制节点（键盘控制、导航栈等）
+- **频率：** 由发布者决定
+- **数据内容：**
+  ```cpp
+  msg->linear.x   // 线速度 x（前后），限制范围 [-0.55, 0.55]
+  msg->linear.y   // 线速度 y（左右），限制范围 [-0.3, 0.3]
+  msg->angular.z  // 角速度 z（旋转），限制范围 [-2.0, 2.0]
+  ```
+
+**5. `/joy`** (sensor_msgs/Joy)
+- **队列大小：** 10
+- **发布者：** 手柄驱动节点
+- **数据内容：**
+  ```cpp
+  msg->axes[]     // 手柄摇杆轴值
+  msg->buttons[]  // 手柄按钮状态
+  ```
+
+#### 发布的话题（输出数据）
+
+**1. `/pi_plus_all`** (sensor_msgs/JointState)
+- **队列大小：** 1000
+- **订阅者：** `LowlevelControllerNode`（低层控制器）
+- **发布频率：** 100Hz (`rlCtrlFreq_`)
+- **数据内容：**
+  ```cpp
+  msg->position[0-11]   // 12个关节的目标位置（RL策略输出，经过缩放）
+  msg->position[12-21]  // 其他关节位置（设为0.0）
+  msg->header.stamp     // ros::Time(0) - 表示立即执行
+  ```
+- **关节顺序（低层控制器期望的顺序）：**
+  ```
+  索引:  0    1    2    3    4    5    6    7    8    9    10   11
+  关节:  左髋pitch, 左髋roll, 左髋yaw, 左膝, 左踝pitch, 左踝roll,
+         右髋pitch, 右髋roll, 右髋yaw, 右膝, 右踝pitch, 右踝roll
+  ```
+- **重要：关节映射配置**
+  - 低层控制器期望以上述顺序接收关节数据
+  - 如果您的 RL 策略输出的关节顺序不同，**必须**在 `config_example.yaml` 中配置 `map_index` 参数，将策略输出的顺序映射到上述期望顺序
+  - `map_index[i]` 指定策略输出的哪个索引应发送到 `/pi_plus_all` 的位置 `i`
+  - 示例：如果您的策略输出顺序是 `[ankle_roll, ankle_pitch, knee, ...]`，但控制器期望 `[hip_pitch, hip_roll, ...]`，则需要设置 `map_index: [5, 4, 3, 2, 1, 0, ...]` 来重新排序
+
+**2. `/pi_plus_preset`** (sensor_msgs/JointState)
+- **队列大小：** 10
+- **订阅者：** `LowlevelControllerNode`（低层控制器）
+- **发布频率：** 仅在状态切换时（LT+RT+START）
+- **数据内容：**
+  ```cpp
+  msg->header.frame_id = "zero"  // 预设姿态名称
+  msg->header.stamp.fromSec(2.0) // 持续时间（秒）
+  ```
+
+#### 数据流图
+
+```
+┌─────────────────────────────────────────────────────────┐
+│   外部推理节点 (hightorque_rl_inference)                │
+│                                                          │
+│   订阅的话题：                                            │
+│   ├─ /sim2real_master_node/rbt_state  → 关节状态        │
+│   ├─ /sim2real_master_node/mtr_state  → 电机状态        │
+│   ├─ /imu/data                        → IMU数据          │
+│   ├─ /cmd_vel                          → 速度指令        │
+│   └─ /joy                              → 手柄输入        │
+│                                                          │
+│   处理：                                                  │
+│   1. 构建36维观测向量                                    │
+│   2. RKNN推理 → 12维动作                                │
+│                                                          │
+│   发布的话题：                                            │
+│   ├─ /pi_plus_all      → 关节控制命令 (100Hz)           │
+│   └─ /pi_plus_preset   → 预设姿态命令 (按需)            │
+└─────────────────────────────────────────────────────────┘
+         ↓                                    ↑
+         │                                    │
+    /pi_plus_all                        /rbt_state, /mtr_state
+         │                                    │
+         ↓                                    ↑
+┌─────────────────────────────────────────────────────────┐
+│   低层控制器 (LowlevelControllerNode)                     │
+│                                                          │
+│   订阅：/pi_plus_all → 执行PD控制 → 发布状态             │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### 观测向量结构（36维）
+
+观测向量按以下方式构建：
+
+- **`observations_[0-1]`**：步态相位（步进计数器的 sin/cos）
+  - STANDBY：`[1.0, -1.0]`
+  - RUNNING：`[sin(2π*step), cos(2π*step)]`
+
+- **`observations_[2-4]`**：速度指令（缩放后）
+  - `[2]`：线速度 x（前后）
+  - `[3]`：线速度 y（左右）
+  - `[4]`：角速度 z（旋转）
+
+- **`observations_[5-16]`**：关节位置（12自由度，缩放因子 `rbtLinPosScale_`）
+
+- **`observations_[17-28]`**：关节速度（12自由度，缩放因子 `rbtLinVelScale_`）
+
+- **`observations_[29-31]`**：基座角速度（缩放因子 `rbtAngVelScale_`）
+
+- **`observations_[32-34]`**：基座姿态（欧拉角：roll, pitch, yaw）
+
+所有观测值都会被裁剪到 `[-clipObs_, clipObs_]`（默认：±18.0）。
 
 ### 常见问题
 
